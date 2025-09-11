@@ -146,8 +146,13 @@ defmodule SynSupervisor.Distribution do
     {node, member_for_node(scope, node)}
   end
 
+  @spec track_spec(scope_t(), Child.spec_t(), pid()) :: :ok | {:error, term()}
+  def track_spec(scope, child_spec, supervisor_pid) do
+    :syn.join(spec_scope(scope), child_spec, supervisor_pid)
+  end
+
   @spec track_spec(scope_t(), Child.spec_t()) :: list(:ok | {:error, term()})
-  defp track_spec(scope, child_spec) do
+  def track_spec(scope, child_spec) do
     scope
     |> supervisors()
     |> then(&multi_join(spec_scope(scope), child_spec, &1))

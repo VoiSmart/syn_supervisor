@@ -1035,6 +1035,14 @@ defmodule SynSupervisor do
   end
 
   def handle_info(:sync, state) do
+    # track all specs: this does nothing if already tracking it, but we need to
+    # do this for the existing specs when joining a cluster
+    track_spec = fn child_spec, _ ->
+      :ok = Distribution.track_spec(state.scope, child_spec, self())
+    end
+
+    Distribution.reduce_specs(state.scope, nil, track_spec)
+
     state = redistribute_processes(state)
 
     state = reschedule_sync_interval_timer(state)
