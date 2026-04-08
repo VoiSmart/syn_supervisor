@@ -1413,7 +1413,7 @@ defmodule SynSupervisor do
     ]
   end
 
-  defp reschedule_sync_interval_timer(state, interval \\ nil) do
+  defp reschedule_sync_interval_timer(%SynSupervisor{} = state, interval \\ nil) do
     interval = interval || state.sync_interval
 
     case state.sync_interval_timer_ref do
