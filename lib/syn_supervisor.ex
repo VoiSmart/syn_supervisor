@@ -944,6 +944,9 @@ defmodule SynSupervisor do
           :ok ->
             {:reply, reply, save_child(pid, id, mfa, restart, shutdown, type, modules, state)}
 
+          {:error, :not_alive} ->
+            {:reply, reply, save_child(pid, id, mfa, restart, shutdown, type, modules, state)}
+
           {:error, reason} ->
             Process.exit(pid, :kill)
             {:reply, {:error, {:child_join_failed, reason}}, state}
@@ -952,6 +955,9 @@ defmodule SynSupervisor do
       {:ok, pid} ->
         case Distribution.child_join(state.scope, id, Node.self(), self(), pid, child_spec) do
           :ok ->
+            {:reply, reply, save_child(pid, id, mfa, restart, shutdown, type, modules, state)}
+
+          {:error, :not_alive} ->
             {:reply, reply, save_child(pid, id, mfa, restart, shutdown, type, modules, state)}
 
           {:error, reason} ->
@@ -1395,6 +1401,10 @@ defmodule SynSupervisor do
 
     case Distribution.child_join(state.scope, id, Node.self(), self(), pid, child) do
       :ok ->
+        state = delete_child(current_pid, state)
+        {:ok, save_child(pid, id, mfa, restart, shutdown, type, modules, state)}
+
+      {:error, :not_alive} ->
         state = delete_child(current_pid, state)
         {:ok, save_child(pid, id, mfa, restart, shutdown, type, modules, state)}
 
