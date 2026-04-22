@@ -16,7 +16,7 @@ defmodule SynSupervisor.Distribution do
     # define and start 3 scopes:
     # - one to store the nodes/supervisors which have joined
     # - one to store the child specifications
-    # - one to store the childrend that have been started
+    # - one to store the children that have been started
     # three different scopes are used to have faster lookups (to avoid calling
     # :syn.group_names(scope) |> Enum.filter(filter_fun) to only get for
     # example the child specs)
@@ -39,7 +39,7 @@ defmodule SynSupervisor.Distribution do
       supervisor_pid: supervisor
     }
 
-    case :syn.join(child_scope(scope), child, child_pid) do
+    case :syn.join(child_scope(scope), id, child_pid, child) do
       :ok ->
         track_spec(scope, child_spec)
         :ok
@@ -51,78 +51,81 @@ defmodule SynSupervisor.Distribution do
 
   @spec find_child(scope_t(), Child.id_t() | pid()) :: {:ok, Child.t()} | {:error, :not_found}
   def find_child(scope, pid) when is_pid(pid) do
-    find_child_with_fn(
-      scope,
-      fn
-        %Child{pid: ^pid} = c ->
-          {:ok, c}
-
-        _ ->
-          false
+    scope
+    |> child_scope()
+    |> :syn.group_names()
+    |> Enum.find_value({:error, :not_found}, fn id ->
+      case :syn.member(child_scope(scope), id, pid) do
+        {^pid, %Child{} = child} -> {:ok, %{child | pid: pid}}
+        _ -> false
       end
-    )
+    end)
   end
 
   def find_child(scope, id) do
-    find_child_with_fn(
-      scope,
-      fn
-        %Child{id: ^id} = c ->
-          {:ok, c}
+    case :syn.members(child_scope(scope), id) do
+      [{pid, %Child{} = child}] ->
+        {:ok, %{child | pid: pid}}
 
-        _ ->
-          false
-      end
-    )
+      [{pid, %Child{} = child} | _rest] ->
+        {:ok, %{child | pid: pid}}
+
+      [] ->
+        {:error, :not_found}
+    end
   end
 
   @spec list_children(scope_t()) :: list(Child.t())
   def list_children(scope) do
-    get_children(scope)
+    scope
+    |> child_scope()
+    |> :syn.group_names()
+    |> Enum.flat_map(fn id ->
+      :syn.members(child_scope(scope), id)
+    end)
+    |> Enum.map(fn {pid, %Child{} = child} ->
+      %{child | pid: pid}
+    end)
   end
 
   @spec find_spec(scope_t(), Child.id_t()) :: {:ok, Child.spec_t()} | {:error, :not_found}
   def find_spec(scope, child_id) do
-    scope
-    |> get_specs()
-    |> Enum.find_value(
-      {:error, :not_found},
-      fn
-        {^child_id, _, _, _, _, _} = s ->
-          {:ok, s}
+    case :syn.members(spec_scope(scope), child_id) do
+      [{_supervisor_pid, child_spec} | _] ->
+        {:ok, child_spec}
 
-        _ ->
-          false
-      end
-    )
-  end
-
-  @spec map_children(scope_t(), (Child.t() -> arg)) :: list(arg) when arg: any
-  def map_children(scope, child_mapper_fun) do
-    scope
-    |> get_children()
-    |> Enum.map(fn child -> child_mapper_fun.(child) end)
-  end
-
-  @spec each_child(scope_t(), (Child.t() -> any())) :: :ok
-  def each_child(scope, fun) do
-    scope
-    |> get_children()
-    |> Enum.each(fn child -> fun.(child) end)
+      [] ->
+        {:error, :not_found}
+    end
   end
 
   @spec reduce_child(scope_t(), acc, (Child.t(), acc -> acc)) :: acc when acc: any()
   def reduce_child(scope, acc, fun) do
     scope
-    |> get_children()
-    |> Enum.reduce(acc, fn child, acc -> fun.(child, acc) end)
+    |> child_scope()
+    |> :syn.group_names()
+    |> Enum.reduce(acc, fn id, acc ->
+      :syn.members(child_scope(scope), id)
+      |> Enum.reduce(acc, fn {pid, %Child{} = child}, acc ->
+        fun.(%{child | pid: pid}, acc)
+      end)
+    end)
   end
 
   @spec reduce_specs(scope_t(), acc, (Child.spec_t(), acc -> acc)) :: acc when acc: any()
   def reduce_specs(scope, acc, fun) do
     scope
-    |> get_specs()
-    |> Enum.reduce(acc, fn spec, acc -> fun.(spec, acc) end)
+    |> spec_scope()
+    |> :syn.group_names()
+    |> Enum.reduce(acc, fn child_id, acc ->
+      case :syn.members(spec_scope(scope), child_id) do
+        [{_supervisor_pid, child_spec} | _] ->
+          fun.(child_spec, acc)
+
+        [] ->
+          acc
+      end
+    end)
   end
 
   @spec node_for_child(scope_t(), Child.spec_t()) :: Node.t()
@@ -147,30 +150,22 @@ defmodule SynSupervisor.Distribution do
   end
 
   @spec track_spec(scope_t(), Child.spec_t(), pid()) :: :ok | {:error, term()}
-  def track_spec(scope, child_spec, supervisor_pid) do
-    :syn.join(spec_scope(scope), child_spec, supervisor_pid)
+  def track_spec(scope, {child_id, _, _, _, _, _} = child_spec, supervisor_pid) do
+    :syn.join(spec_scope(scope), child_id, supervisor_pid, child_spec)
   end
 
   @spec track_spec(scope_t(), Child.spec_t()) :: list(:ok | {:error, term()})
-  def track_spec(scope, child_spec) do
+  def track_spec(scope, {child_id, _, _, _, _, _} = child_spec) do
     scope
     |> supervisors()
-    |> then(&multi_join(spec_scope(scope), child_spec, &1))
+    |> Enum.map(&:syn.join(spec_scope(scope), child_id, &1, child_spec))
   end
 
   @spec untrack_spec(scope_t(), Child.spec_t()) :: list(:ok | {:error, term()})
-  def untrack_spec(scope, child_spec) do
+  def untrack_spec(scope, {child_id, _, _, _, _, _}) do
     scope
     |> supervisors()
-    |> then(&multi_leave(spec_scope(scope), child_spec, &1))
-  end
-
-  defp multi_join(scope, group, pids) do
-    Enum.map(pids, &:syn.join(scope, group, &1))
-  end
-
-  defp multi_leave(scope, group, pids) do
-    Enum.map(pids, &:syn.leave(scope, group, &1))
+    |> Enum.map(&:syn.leave(spec_scope(scope), child_id, &1))
   end
 
   @spec check_members(scope_t()) :: :ok
@@ -209,23 +204,6 @@ defmodule SynSupervisor.Distribution do
     end
   end
 
-  @spec find_child_with_fn(scope_t(), (Child.t() -> boolean())) ::
-          {:ok, Child.t()} | {:error, :not_found}
-  defp find_child_with_fn(scope, fun) do
-    scope
-    |> get_children()
-    |> Enum.find_value(
-      {:error, :not_found},
-      fn c ->
-        if fun.(c) do
-          {:ok, c}
-        else
-          false
-        end
-      end
-    )
-  end
-
   @spec supervisors(scope_t()) :: list(pid())
   defp supervisors(scope) do
     scope
@@ -249,24 +227,10 @@ defmodule SynSupervisor.Distribution do
     :syn.add_node_to_scopes(scopes)
   end
 
-  @spec get_children(scope_t()) :: list(Child.t())
-  defp get_children(scope) do
-    scope
-    |> child_scope()
-    |> :syn.group_names()
-  end
-
   @spec get_nodes(scope_t()) :: list(atom())
   defp get_nodes(scope) do
     scope
     |> node_scope()
-    |> :syn.group_names()
-  end
-
-  @spec get_specs(scope_t()) :: list(Child.spec_t())
-  defp get_specs(scope) do
-    scope
-    |> spec_scope()
     |> :syn.group_names()
   end
 end
