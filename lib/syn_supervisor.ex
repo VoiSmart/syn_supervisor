@@ -887,15 +887,10 @@ defmodule SynSupervisor do
     end
   end
 
-  defp terminate_local_children(child_id, %{children: children} = state) do
-    children
-    |> Enum.find(fn
-      {_pid, {^child_id, _, _, _, _, _}} -> true
-      _ -> false
-    end)
-    |> case do
-      nil -> {:reply, {:error, :not_found}, state}
-      {pid, _} -> terminate_local_children(pid, state)
+  defp terminate_local_children(child_id, %{children_by_child_id: children_by_child_id} = state) do
+    case Map.fetch(children_by_child_id, child_id) do
+      {:ok, pid} -> terminate_local_children(pid, state)
+      :error -> {:reply, {:error, :not_found}, state}
     end
   end
 
@@ -1009,7 +1004,7 @@ defmodule SynSupervisor do
   defp save_child(pid, id, mfa, restart, shutdown, type, modules, state) do
     mfa = mfa_for_restart(mfa, restart)
     child_spec = {id, mfa, restart, shutdown, type, modules}
-    state = put_in(state.children_by_child_id[id], child_spec)
+    state = put_in(state.children_by_child_id[id], pid)
     put_in(state.children[pid], child_spec)
   end
 
@@ -1161,7 +1156,7 @@ defmodule SynSupervisor do
   end
 
   defp child_running?(%{children_by_child_id: children_by_child_id}, child_id) do
-    not is_nil(Map.get(children_by_child_id, child_id))
+    Map.has_key?(children_by_child_id, child_id)
   end
 
   defp maybe_stop_child(%Child{} = c, assigned_node, _assigned_sup, state) do
@@ -1325,16 +1320,19 @@ defmodule SynSupervisor do
          pid,
          %{children: children, children_by_child_id: children_by_child_id} = state
        ) do
-    children_by_child_id =
-      case Map.get(children, pid) do
-        {child_id, _, _, _, _, _} ->
-          Map.delete(children_by_child_id, child_id)
+    {children_by_child_id, children} =
+      case Map.pop(children, pid) do
+        {{child_id, _, _, _, _, _}, children} ->
+          {Map.delete(children_by_child_id, child_id), children}
 
-        _ ->
-          children_by_child_id
+        {{:restarting, {child_id, _, _, _, _, _}}, children} ->
+          {Map.delete(children_by_child_id, child_id), children}
+
+        {nil, children} ->
+          {children_by_child_id, children}
       end
 
-    %{state | children: Map.delete(children, pid), children_by_child_id: children_by_child_id}
+    %{state | children: children, children_by_child_id: children_by_child_id}
   end
 
   defp restart_child(pid, child, state) do
