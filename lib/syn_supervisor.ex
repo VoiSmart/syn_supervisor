@@ -928,40 +928,37 @@ defmodule SynSupervisor do
   end
 
   defp start_local_child(
-         {id, {m, f, args} = mfa, restart, shutdown, type, modules} = child_spec,
-         state
+         {_, {m, f, args}, _, _, _, _} = child_spec,
+         %{extra_arguments: extra} = state
        ) do
-    %{extra_arguments: extra} = state
-
     case reply = start_child(m, f, extra ++ args) do
       {:ok, pid, _} ->
-        case Distribution.child_join(state.scope, id, Node.self(), self(), pid, child_spec) do
-          :ok ->
-            {:reply, reply, save_child(pid, id, mfa, restart, shutdown, type, modules, state)}
-
-          {:error, :not_alive} ->
-            {:reply, reply, save_child(pid, id, mfa, restart, shutdown, type, modules, state)}
-
-          {:error, reason} ->
-            Process.exit(pid, :kill)
-            {:reply, {:error, {:child_join_failed, reason}}, state}
-        end
+        handle_start_local_child_response(pid, reply, child_spec, state)
 
       {:ok, pid} ->
-        case Distribution.child_join(state.scope, id, Node.self(), self(), pid, child_spec) do
-          :ok ->
-            {:reply, reply, save_child(pid, id, mfa, restart, shutdown, type, modules, state)}
-
-          {:error, :not_alive} ->
-            {:reply, reply, save_child(pid, id, mfa, restart, shutdown, type, modules, state)}
-
-          {:error, reason} ->
-            Process.exit(pid, :kill)
-            {:reply, {:error, {:child_join_failed, reason}}, state}
-        end
+        handle_start_local_child_response(pid, reply, child_spec, state)
 
       _ ->
         {:reply, reply, state}
+    end
+  end
+
+  defp handle_start_local_child_response(
+         pid,
+         reply,
+         {id, _, _, _, _, _} = child_spec,
+         state
+       ) do
+    case Distribution.child_join(state.scope, id, Node.self(), self(), pid, child_spec) do
+      :ok ->
+        {:reply, reply, save_child(pid, child_spec, state)}
+
+      {:error, :not_alive} ->
+        {:reply, reply, save_child(pid, child_spec, state)}
+
+      {:error, reason} ->
+        Process.exit(pid, :kill)
+        {:reply, {:error, {:child_join_failed, reason}}, state}
     end
   end
 
@@ -1001,9 +998,8 @@ defmodule SynSupervisor do
     end
   end
 
-  defp save_child(pid, id, mfa, restart, shutdown, type, modules, state) do
-    mfa = mfa_for_restart(mfa, restart)
-    child_spec = {id, mfa, restart, shutdown, type, modules}
+  defp save_child(pid, {id, mfa, restart, shutdown, type, modules}, state) do
+    child_spec = {id, mfa_for_restart(mfa, restart), restart, shutdown, type, modules}
     state = put_in(state.children_by_child_id[id], pid)
     put_in(state.children[pid], child_spec)
   end
@@ -1399,16 +1395,16 @@ defmodule SynSupervisor do
   end
 
   defp handle_child_restart_response(pid, current_pid, child, state) do
-    {id, {_m, _f, _args} = mfa, restart, shutdown, type, modules} = child
+    {id, _, _, _, _, _} = child
 
     case Distribution.child_join(state.scope, id, Node.self(), self(), pid, child) do
       :ok ->
         state = delete_child(current_pid, state)
-        {:ok, save_child(pid, id, mfa, restart, shutdown, type, modules, state)}
+        {:ok, save_child(pid, child, state)}
 
       {:error, :not_alive} ->
         state = delete_child(current_pid, state)
-        {:ok, save_child(pid, id, mfa, restart, shutdown, type, modules, state)}
+        {:ok, save_child(pid, child, state)}
 
       {:error, reason} ->
         Process.exit(pid, :kill)
