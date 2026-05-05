@@ -1047,7 +1047,7 @@ defmodule SynSupervisor do
     end
   end
 
-  def handle_info(:sync, state) do
+  def handle_info({:timeout, ref, :sync}, %{sync_interval_timer_ref: ref} = state) do
     # track all specs: this does nothing if already tracking it, but we need to
     # do this for the existing specs when joining a cluster
     track_spec = fn child_spec, _ ->
@@ -1059,6 +1059,10 @@ defmodule SynSupervisor do
     state = redistribute_processes(state)
 
     state = reschedule_sync_interval_timer(state)
+    {:noreply, state}
+  end
+
+  def handle_info({:timeout, _ref, :sync}, state) do
     {:noreply, state}
   end
 
@@ -1464,7 +1468,7 @@ defmodule SynSupervisor do
         false
     end
 
-    timer_ref = Process.send_after(self(), :sync, interval)
+    timer_ref = :erlang.start_timer(interval, self(), :sync)
     %SynSupervisor{state | sync_interval_timer_ref: timer_ref}
   end
 

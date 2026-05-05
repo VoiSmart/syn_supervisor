@@ -167,6 +167,28 @@ defmodule SynSupervisorTest do
     end
   end
 
+  describe "sync timer" do
+    test "ignores stale timeout messages and reschedules the current timer", %{scope: scope} do
+      {:ok, pid} =
+        SynSupervisor.start_link(
+          strategy: :one_for_one,
+          scope: scope,
+          sync_interval: 60_000,
+          sync_delay_on_topology_change: 60_000
+        )
+
+      %{sync_interval_timer_ref: current_timer_ref} = :sys.get_state(pid)
+
+      send(pid, {:timeout, make_ref(), :sync})
+      assert %{sync_interval_timer_ref: ^current_timer_ref} = :sys.get_state(pid)
+
+      send(pid, {:timeout, current_timer_ref, :sync})
+      %{sync_interval_timer_ref: next_timer_ref} = :sys.get_state(pid)
+
+      refute next_timer_ref == current_timer_ref
+    end
+  end
+
   ## Code change
 
   describe "code_change/3" do
