@@ -35,7 +35,6 @@ defmodule SynSupervisor.Distribution do
       id: id,
       node: node,
       pid: child_pid,
-      spec: child_spec,
       supervisor_pid: supervisor
     }
 
@@ -73,6 +72,11 @@ defmodule SynSupervisor.Distribution do
       [] ->
         {:error, :not_found}
     end
+  end
+
+  @spec spec_for_child(scope_t(), Child.t()) :: {:ok, Child.spec_t()} | {:error, :not_found}
+  def spec_for_child(scope, %Child{} = c) do
+    find_spec(scope, c.id)
   end
 
   @spec list_children(scope_t()) :: list(Child.t())
@@ -161,8 +165,12 @@ defmodule SynSupervisor.Distribution do
     |> Enum.map(&:syn.join(spec_scope(scope), child_id, &1, child_spec))
   end
 
-  @spec untrack_spec(scope_t(), Child.spec_t()) :: list(:ok | {:error, term()})
+  @spec untrack_spec(scope_t(), Child.spec_t() | Child.id_t()) :: list(:ok | {:error, term()})
   def untrack_spec(scope, {child_id, _, _, _, _, _}) do
+    untrack_spec(scope, child_id)
+  end
+
+  def untrack_spec(scope, child_id) do
     scope
     |> supervisors()
     |> Enum.map(&:syn.leave(spec_scope(scope), child_id, &1))

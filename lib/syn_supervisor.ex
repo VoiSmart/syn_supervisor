@@ -784,9 +784,11 @@ defmodule SynSupervisor do
     reply =
       state.scope
       |> Distribution.list_children()
-      |> Enum.map(fn %Child{} = c ->
-        {id, _, _, _, type, modules} = c.spec
-        {id, c.pid, type, modules}
+      |> Enum.flat_map(fn %Child{} = c ->
+        case Distribution.spec_for_child(state.scope, c) do
+          {:ok, {id, _, _, _, type, modules}} -> [{id, c.pid, type, modules}]
+          _ -> []
+        end
       end)
 
     {:reply, reply, state}
@@ -832,9 +834,10 @@ defmodule SynSupervisor do
     {active, workers, supervisors} =
       Enum.reduce(children, {0, 0, 0}, fn
         %Child{} = c, {active, worker, supervisor} ->
-          case c.spec do
-            {_, _, _, _, :worker, _} -> {active + 1, worker + 1, supervisor}
-            {_, _, _, _, :supervisor, _} -> {active + 1, worker, supervisor + 1}
+          case Distribution.spec_for_child(state.scope, c) do
+            {:ok, {_, _, _, _, :worker, _}} -> {active + 1, worker + 1, supervisor}
+            {:ok, {_, _, _, _, :supervisor, _}} -> {active + 1, worker, supervisor + 1}
+            _ -> {active, worker, supervisor}
           end
       end)
 
@@ -854,10 +857,9 @@ defmodule SynSupervisor do
         # try local children anyway
         terminate_local_children(pid_or_child_id, state)
 
-      {:ok, %Child{node: node, supervisor_pid: supervisor} = c} ->
+      {:ok, %Child{id: child_id, node: node, supervisor_pid: supervisor} = c} ->
         if node == Node.self() do
-          Distribution.untrack_spec(state.scope, c.spec)
-          terminate_local_children(c.pid, state)
+          terminate_local_children_and_untrack_spec(c.pid, child_id, state)
         else
           terminate_remote_children(node, supervisor, c.pid, state)
         end
@@ -873,6 +875,17 @@ defmodule SynSupervisor do
       {n, {:error, :not_found}} when n < max_children -> handle_start_child(child, state)
       {_n, {:error, :not_found}} -> {:reply, {:error, :max_children}, state}
       {_n, _} -> {:reply, {:error, :already_present}, state}
+    end
+  end
+
+  defp terminate_local_children_and_untrack_spec(pid, child_id, state) do
+    case terminate_local_children(pid, state) do
+      {:reply, :ok, next_state} ->
+        Distribution.untrack_spec(state.scope, child_id)
+        {:reply, :ok, next_state}
+
+      reply ->
+        reply
     end
   end
 
@@ -1170,10 +1183,20 @@ defmodule SynSupervisor do
 
   defp maybe_start_child(%Child{} = c, assigned_node, _assigned_sup, state) do
     if assigned_node == Node.self() and c.node != Node.self() do
-      {_, _, state} = start_local_child(c.spec, state)
-      state
+      find_spec_and_start_local_child(c.id, state)
     else
       state
+    end
+  end
+
+  def find_spec_and_start_local_child(child_id, state) do
+    case Distribution.find_spec(state.scope, child_id) do
+      {:ok, child_spec} ->
+        {_, _, state} = start_local_child(child_spec, state)
+        state
+
+      _ ->
+        state
     end
   end
 

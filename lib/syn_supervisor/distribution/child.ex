@@ -10,10 +10,9 @@ defmodule SynSupervisor.Distribution.Child do
           id: id_t(),
           pid: pid(),
           node: Node.t(),
-          supervisor_pid: pid(),
-          spec: spec_t()
+          supervisor_pid: pid()
         }
 
-  @enforce_keys [:id, :pid, :node, :supervisor_pid, :spec]
-  defstruct [:id, :pid, :node, :supervisor_pid, :spec]
+  @enforce_keys [:id, :pid, :node, :supervisor_pid]
+  defstruct [:id, :pid, :node, :supervisor_pid]
 end
