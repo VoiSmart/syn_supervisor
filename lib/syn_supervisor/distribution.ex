@@ -10,6 +10,15 @@ defmodule SynSupervisor.Distribution do
   @type group_t() :: any()
 
   @type child_mapper_t :: (Child.t() -> any())
+  @type nodes_t :: MapSet.t(Node.t())
+
+  @type status_t :: %{
+          ready?: boolean(),
+          expected_remote_nodes: nodes_t(),
+          spec_scope_nodes: nodes_t(),
+          child_scope_nodes: nodes_t(),
+          node_scope_nodes: nodes_t()
+        }
 
   @spec start_and_join(scope_t()) :: :ok
   def start_and_join(scope) do
@@ -26,6 +35,34 @@ defmodule SynSupervisor.Distribution do
     start([node_scope, spec_scope, child_scope])
 
     :syn.join(node_scope, Node.self(), self())
+  end
+
+  @spec ready?(scope_t(), list(Node.t())) :: boolean()
+  def ready?(scope, expected_remote_nodes \\ Node.list()) do
+    status(scope, expected_remote_nodes).ready?
+  end
+
+  @spec status(scope_t(), list(Node.t())) :: status_t()
+  def status(scope, expected_remote_nodes \\ Node.list()) do
+    expected_remote_nodes = MapSet.new(expected_remote_nodes)
+
+    node_scope_nodes = pg_subcluster_nodes(node_scope(scope))
+    spec_scope_nodes = pg_subcluster_nodes(spec_scope(scope))
+    child_scope_nodes = pg_subcluster_nodes(child_scope(scope))
+
+    ready? =
+      Enum.all?(
+        [node_scope_nodes, spec_scope_nodes, child_scope_nodes],
+        &MapSet.equal?(&1, expected_remote_nodes)
+      )
+
+    %{
+      ready?: ready?,
+      expected_remote_nodes: expected_remote_nodes,
+      node_scope_nodes: node_scope_nodes,
+      spec_scope_nodes: spec_scope_nodes,
+      child_scope_nodes: child_scope_nodes
+    }
   end
 
   @spec child_join(scope_t(), Child.id_t(), Node.t(), pid(), pid(), Child.spec_t()) ::
@@ -240,5 +277,12 @@ defmodule SynSupervisor.Distribution do
     scope
     |> node_scope()
     |> :syn.group_names()
+  end
+
+  @spec pg_subcluster_nodes(scope_t()) :: nodes_t()
+  defp pg_subcluster_nodes(scope) do
+    :pg
+    |> :syn.subcluster_nodes(scope)
+    |> MapSet.new()
   end
 end

@@ -409,6 +409,14 @@ defmodule SynSupervisor do
     validate_and_start_child(supervisor, Supervisor.child_spec(child_spec, []))
   end
 
+  def distribution_ready?(supervisor, expected_remote_nodes \\ Node.list()) do
+    call(supervisor, {:distribution_ready?, expected_remote_nodes})
+  end
+
+  def distribution_status(supervisor, expected_remote_nodes \\ Node.list()) do
+    call(supervisor, {:distribution_status, expected_remote_nodes})
+  end
+
   defp validate_and_start_child(supervisor, child_spec) do
     case validate_child(child_spec) do
       {:ok, child} ->
@@ -876,6 +884,14 @@ defmodule SynSupervisor do
       {_n, {:error, :not_found}} -> {:reply, {:error, :max_children}, state}
       {_n, _} -> {:reply, {:error, :already_present}, state}
     end
+  end
+
+  def handle_call({:distribution_ready?, expected_remote_nodes}, _from, state) do
+    {:reply, Distribution.ready?(state.scope, expected_remote_nodes), state}
+  end
+
+  def handle_call({:distribution_status, expected_remote_nodes}, _from, state) do
+    {:reply, Distribution.status(state.scope, expected_remote_nodes), state}
   end
 
   defp terminate_local_children_and_untrack_spec(pid, child_id, state) do

@@ -6,6 +6,7 @@ defmodule SynSupervisor.ClusteredTest do
 
   @supervisor TestApp.DistributedSupervisor
 
+  alias SynSupervisor.Distribution
   alias SynSupervisor.Test.Support.Worker
 
   setup do
@@ -116,6 +117,37 @@ defmodule SynSupervisor.ClusteredTest do
                  {{Worker, :c}, _, :worker, [Worker]}
                ]
              } = local_children([node1, node2])
+    end
+  end
+
+  describe "Distribution.status/2" do
+    test "tracks node, spec, and child scopes independently" do
+      [node1, node2] = start_nodes(:test_app, "status", 2)
+
+      scope = :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower) |> String.to_atom()
+
+      node_scope = :"#{scope}-node"
+      spec_scope = :"#{scope}-spec"
+      child_scope = :"#{scope}-child"
+
+      assert :ok =
+               :rpc.call(node1, :syn, :add_node_to_scopes, [[node_scope, spec_scope, child_scope]])
+
+      assert :ok = :rpc.call(node2, :syn, :add_node_to_scopes, [[node_scope]])
+
+      expected_remote_nodes = MapSet.new([node2])
+      expected_node_scope_nodes = MapSet.new([node2])
+      expected_no_nodes = MapSet.new()
+
+      assert_async do
+        assert %{
+                 ready?: false,
+                 expected_remote_nodes: ^expected_remote_nodes,
+                 node_scope_nodes: ^expected_node_scope_nodes,
+                 spec_scope_nodes: ^expected_no_nodes,
+                 child_scope_nodes: ^expected_no_nodes
+               } = :rpc.call(node1, Distribution, :status, [scope, [node2]])
+      end
     end
   end
 
