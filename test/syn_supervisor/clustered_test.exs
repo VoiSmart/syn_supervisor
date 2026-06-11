@@ -7,6 +7,7 @@ defmodule SynSupervisor.ClusteredTest do
   @supervisor TestApp.DistributedSupervisor
 
   alias SynSupervisor.Distribution
+  alias SynSupervisor.Test.Support.SlowWorker
   alias SynSupervisor.Test.Support.Worker
 
   setup do
@@ -117,6 +118,27 @@ defmodule SynSupervisor.ClusteredTest do
                  {{Worker, :c}, _, :worker, [Worker]}
                ]
              } = local_children([node1, node2])
+    end
+  end
+
+  test "reconciles a remote start timeout when the child eventually starts" do
+    [node1, node2] = start_nodes(:test_app, "timeout", 2)
+
+    child_spec = SlowWorker.child_spec(5_100, :slow_init_args)
+
+    assert {:ok, pid} = start_child(node2, child_spec)
+
+    assert_async do
+      children =
+        [node1, node2]
+        |> local_children()
+        |> Map.values()
+        |> List.flatten()
+
+      assert [{_, ^pid, :worker, [SlowWorker]}] =
+               Enum.filter(children, fn {_, child_pid, :worker, [SlowWorker]} ->
+                 child_pid == pid
+               end)
     end
   end
 
@@ -374,7 +396,10 @@ defmodule SynSupervisor.ClusteredTest do
   defp start_nodes(app, prefix, n) do
     LocalCluster.start_nodes(prefix, n,
       applications: [:syn, :libring, app],
-      files: ["test/support/syn_supervisor/worker.ex"]
+      files: [
+        "test/support/syn_supervisor/worker.ex",
+        "test/support/syn_supervisor/slow_worker.ex"
+      ]
     )
   end
 

@@ -189,7 +189,7 @@ defmodule SynSupervisor do
           {:ok, pid}
           | {:ok, pid, info :: term}
           | :ignore
-          | {:error, {:already_started, pid} | :max_children | term}
+          | {:error, {:already_started, pid} | :already_present | :max_children | term}
 
   # In this struct, `args` refers to the arguments passed to init/1 (the `init_arg`).
   defstruct [
@@ -943,17 +943,63 @@ defmodule SynSupervisor do
       _ ->
         child
         |> start_remote_child({assigned_node, assigned_supervisor}, state)
-        |> maybe_update_ring_and_retry(child, state)
+        |> maybe_update_ring_and_retry(child, {assigned_node, assigned_supervisor}, state)
     end
   end
 
-  defp maybe_update_ring_and_retry({:reply, {:badrpc, :nodedown}, state}, child, _state) do
+  defp maybe_update_ring_and_retry(
+         {:reply, {:badrpc, :nodedown}, state},
+         child,
+         _assigned_member,
+         _state
+       ) do
     Distribution.check_members(state.scope)
     handle_start_child(child, state)
   end
 
-  defp maybe_update_ring_and_retry(res, _child, _state) do
+  defp maybe_update_ring_and_retry(
+         {:reply, {:badrpc, {:EXIT, {:noproc, _reason}}}, state},
+         child,
+         _assigned_member,
+         _state
+       ) do
+    Distribution.check_members(state.scope)
+    handle_start_child(child, state)
+  end
+
+  defp maybe_update_ring_and_retry(
+         {:reply, {:badrpc, :timeout}, state},
+         {child_id, _mfa, _restart, _shutdown, _type, _modules} = child,
+         assigned_member,
+         _state
+       ) do
+    Distribution.check_members(state.scope)
+
+    case Distribution.find_child(state.scope, child_id) do
+      {:ok, %Child{pid: pid}} ->
+        {:reply, {:ok, pid}, state}
+
+      {:error, :not_found} ->
+        maybe_retry_remote_start_after_timeout(child, assigned_member, state)
+    end
+  end
+
+  defp maybe_update_ring_and_retry(res, _child, _assigned_member, _state) do
     res
+  end
+
+  defp maybe_retry_remote_start_after_timeout(
+         {child_id, _mfa, _restart, _shutdown, _type, _modules} = child,
+         assigned_member,
+         state
+       ) do
+    case Distribution.member_for_child(state.scope, child_id) do
+      ^assigned_member ->
+        {:reply, normalize_remote_start_error({:badrpc, :timeout}), state}
+
+      _new_assigned_member ->
+        handle_start_child(child, state)
+    end
   end
 
   defp start_local_child(
@@ -1005,12 +1051,14 @@ defmodule SynSupervisor do
 
     case :rpc.call(node, __MODULE__, :start_child, [assigned_sup, child], 5_000) do
       {:badrpc, _reason} = err ->
-        {:reply, err, state}
+        {:reply, normalize_remote_start_error(err), state}
 
       res ->
         {:reply, res, state}
     end
   end
+
+  defp normalize_remote_start_error({:badrpc, _reason} = err), do: {:error, err}
 
   defp start_child(m, f, a) do
     try do
